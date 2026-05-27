@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>远程 Qwen3-ASR 会议记录</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <h1>会议记录助手</h1>
+      <span class="brand-sub">基于 Qwen3-ASR-Flash</span>
+    </div>
+    <div class="status-pill" id="health-pill">检查中…</div>
+  </header>
+
+  <main class="container">
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="realtime" role="tab">🎤 实时录音</button>
+      <button class="tab" data-tab="upload" role="tab">📁 上传音频</button>
+    </nav>
+
+    <!-- ─── 实时录音 ─── -->
+    <section class="panel active" id="panel-realtime">
+      <div class="card">
+        <div class="row controls">
+          <button id="btn-start" class="btn primary">
+            <span class="dot-record"></span>开始录音
+          </button>
+          <button id="btn-stop" class="btn danger" disabled>⏹ 停止</button>
+          <div class="meta">
+            <span id="rt-status" class="meta-text">点击"开始录音"开始</span>
+          </div>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="vu-meter" id="vu-meter"><div class="vu-bar"></div></div>
+          <div class="rt-timer" id="rt-timer">00:00</div>
+        </div>
+
+        <div class="row">
+          <label class="small">每片秒数：
+            <input id="chunk-secs" type="number" min="3" max="30" value="8" />
+          </label>
+          <label class="small">
+            <input id="auto-flush" type="checkbox" checked /> 录完自动生成纪要
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📜 实时转写</h3>
+        <div id="rt-transcript" class="transcript" data-empty="尚无内容，开始录音后会自动追加…"></div>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <h3>📝 会议纪要</h3>
+          <button id="btn-summary-rt" class="btn">生成会议纪要</button>
+        </div>
+        <div id="rt-summary" class="markdown" data-empty="点击右上角的『生成会议纪要』按钮…"></div>
+      </div>
+    </section>
+
+    <!-- ─── 文件上传 ─── -->
+    <section class="panel" id="panel-upload">
+      <div class="card">
+        <div class="dropzone" id="dropzone">
+          <input id="file-input" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.webm" hidden />
+          <div class="dz-icon">📂</div>
+          <div class="dz-title">拖拽音频文件到此处<br />或点击选择</div>
+          <div class="dz-sub">支持 mp3 / wav / m4a / flac / ogg / webm 等格式</div>
+          <div class="dz-filename" id="dz-filename"></div>
+        </div>
+
+        <div class="row controls">
+          <label class="small">说话人数量：
+            <select id="speakers-select">
+              <option value="0">自动估计</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+            </select>
+          </label>
+          <button id="btn-upload" class="btn primary" disabled>🚀 开始处理</button>
+          <span id="upload-status" class="meta-text"></span>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="progress-bar"><div id="upload-progress" class="progress-fill"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📜 转写结果</h3>
+        <div id="up-transcript" class="transcript" data-empty="上传文件并点击『开始处理』后显示…"></div>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <h3>📝 会议纪要</h3>
+          <button id="btn-summary-up" class="btn" disabled>生成会议纪要</button>
+        </div>
+        <div id="up-summary" class="markdown" data-empty="转写完成后可生成会议纪要…"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span id="footer-info">远程 ASR / 内网 LLM 代理</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
