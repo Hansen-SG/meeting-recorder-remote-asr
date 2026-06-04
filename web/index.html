@@ -13,7 +13,13 @@
       <img class="brand-icon" src="/static/favicon.png" alt="昆仑小智" />
       <h1>昆仑小智会议记录助手</h1>
     </div>
-    <div class="status-pill" id="health-pill">检查中…</div>
+    <div class="topbar-right">
+      <div class="status-pill" id="health-pill">检查中…</div>
+      <div class="user-info" id="user-info" style="display:none">
+        <span class="user-name" id="user-name"></span>
+        <a class="logout-btn" href="/auth/logout" title="退出登录">退出</a>
+      </div>
+    </div>
   </header>
 
   <main class="container">

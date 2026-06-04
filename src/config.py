@@ -118,6 +118,17 @@ FEISHU_DOC_BASE_URL: str = os.environ.get(
     "FEISHU_DOC_BASE_URL", "https://nipj5983sr.fklzl.cnpc.com.cn"
 )
 
+# ─────────────────────────────────────────
+# 飞书扫码登录认证
+# ─────────────────────────────────────────
+AUTH_ENABLED: bool = os.environ.get("AUTH_ENABLED", "true").lower() in ("1", "true", "yes")
+# Session 签名密钥（生产环境请设置随机字符串）
+AUTH_SECRET_KEY: str = os.environ.get("AUTH_SECRET_KEY", "klxz-meeting-2024-secret-key")
+# OAuth 回调地址（部署时设为实际域名）
+AUTH_REDIRECT_URI: str = os.environ.get("AUTH_REDIRECT_URI", "http://10.22.145.66/auth/callback")
+# Session 过期时间（秒，默认 7 天）
+AUTH_SESSION_EXPIRE: int = int(os.environ.get("AUTH_SESSION_EXPIRE", "604800"))
+
 
 def validate() -> list[str]:
     """校验关键配置，返回警告信息列表"""

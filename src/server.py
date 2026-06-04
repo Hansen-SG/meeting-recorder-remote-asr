@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from starlette.responses import RedirectResponse
 
 SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
@@ -33,6 +34,7 @@ from file_processor import (
 )
 from llm_summary import LLMSummaryGenerator
 from qwen_asr import Qwen3ASRClient, Qwen3ASRError
+from auth import AuthMiddleware, get_feishu_auth_url, exchange_code_for_user, create_session_token, verify_session_token
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,71 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# 飞书扫码登录认证中间件
+app.add_middleware(AuthMiddleware)
+
+
+# ─────────────────────────────────────────
+# 认证路由
+# ─────────────────────────────────────────
+
+LOGIN_HTML = STATIC_DIR / "login.html"
+
+
+@app.get("/auth/login")
+async def auth_login():
+    """登录页面：显示飞书扫码登录入口"""
+    if LOGIN_HTML.exists():
+        return FileResponse(str(LOGIN_HTML))
+    # 备用：直接跳转飞书
+    return RedirectResponse(get_feishu_auth_url())
+
+
+@app.get("/auth/feishu")
+async def auth_feishu_redirect():
+    """跳转到飞书 OAuth 授权页"""
+    return RedirectResponse(get_feishu_auth_url())
+
+
+@app.get("/auth/callback")
+async def auth_callback(code: str = "", state: str = ""):
+    """飞书 OAuth 回调：用 code 换取用户信息并设置 session"""
+    if not code:
+        return RedirectResponse("/auth/login")
+    try:
+        user_info = exchange_code_for_user(code)
+        logger.info(f"用户登录成功: {user_info.get('name')} ({user_info.get('user_id')})")
+        token = create_session_token(user_info)
+        response = RedirectResponse("/")
+        response.set_cookie(
+            key="session",
+            value=token,
+            max_age=config.AUTH_SESSION_EXPIRE,
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+    except Exception as e:
+        logger.error(f"飞书登录失败: {e}")
+        return RedirectResponse("/auth/login?error=auth_failed")
+
+
+@app.get("/auth/logout")
+async def auth_logout():
+    """登出：清除 session cookie"""
+    response = RedirectResponse("/auth/login")
+    response.delete_cookie("session")
+    return response
+
+
+@app.get("/auth/user")
+async def auth_user(request: Request):
+    """获取当前登录用户信息"""
+    token = request.cookies.get("session")
+    user = verify_session_token(token)
+    if user:
+        return {"logged_in": True, "name": user.get("name", ""), "avatar": user.get("avatar", "")}
+    return {"logged_in": False}
 
 
 @app.on_event("startup")

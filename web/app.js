@@ -1,6 +1,16 @@
 // 远程 Qwen3-ASR 会议记录 - 前端
 // 实时录音通过浏览器 MediaRecorder，按时间窗口切片上传到后端
 
+// 全局 401 拦截：未登录时跳转登录页
+const _origFetch = window.fetch;
+window.fetch = async function(...args) {
+  const resp = await _origFetch.apply(this, args);
+  if (resp.status === 401) {
+    window.location.href = "/auth/login";
+  }
+  return resp;
+};
+
 (() => {
   // ─────────────────────────────────────
   // 通用工具
@@ -108,6 +118,23 @@
     }
   }
   healthCheck();
+
+  // ─────────────────────────────────────
+  // 用户信息显示
+  // ─────────────────────────────────────
+  async function loadUserInfo() {
+    try {
+      const r = await fetch("/auth/user");
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.logged_in && data.name) {
+        const el = $("#user-info");
+        $("#user-name").textContent = data.name;
+        el.style.display = "flex";
+      }
+    } catch (e) { /* ignore */ }
+  }
+  loadUserInfo();
 
   // ─────────────────────────────────────
   // 热词管理

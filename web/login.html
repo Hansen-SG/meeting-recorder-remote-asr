@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 - 昆仑小智会议记录助手</title>
+  <link rel="icon" type="image/png" href="/auth/login?_static=favicon" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      background: white;
+      border-radius: 16px;
+      padding: 48px 40px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      text-align: center;
+      max-width: 400px;
+      width: 90%;
+    }
+    .brand-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 22px;
+      color: #1a1a2e;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 32px;
+    }
+    .login-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      padding: 14px 24px;
+      background: #3370ff;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+    }
+    .login-btn:hover {
+      background: #245bdb;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(51, 112, 255, 0.4);
+    }
+    .login-btn:active {
+      transform: translateY(0);
+    }
+    .feishu-icon {
+      width: 24px;
+      height: 24px;
+    }
+    .error-msg {
+      color: #e74c3c;
+      font-size: 13px;
+      margin-top: 16px;
+      display: none;
+    }
+    .footer {
+      margin-top: 32px;
+      font-size: 12px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <img class="brand-icon" src="/static/favicon.png" alt="昆仑小智" onerror="this.style.display='none'" />
+    <h1>昆仑小智会议记录助手</h1>
+    <p class="subtitle">请使用飞书扫码登录后使用</p>
+
+    <a class="login-btn" href="/auth/feishu">
+      <svg class="feishu-icon" viewBox="0 0 24 24" fill="none">
+        <path d="M4.5 3L8.5 7H15.5L19.5 3" stroke="white" stroke-width="2" stroke-linecap="round"/>
+        <path d="M8.5 7L4 12.5L12 21L20 12.5L15.5 7" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M4 12.5L12 16L20 12.5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      飞书扫码登录
+    </a>
+
+    <p class="error-msg" id="error-msg">登录失败，请重试</p>
+
+    <p class="footer">仅限授权用户访问 · 数据安全由企业飞书保障</p>
+  </div>
+
+  <script>
+    // 检查 URL 中是否有错误参数
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error")) {
+      const el = document.getElementById("error-msg");
+      el.style.display = "block";
+      el.textContent = params.get("error") === "auth_failed" 
+        ? "飞书认证失败，请重试或联系管理员" 
+        : "登录异常，请重试";
+    }
+  </script>
+</body>
+</html>
