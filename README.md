@@ -82,18 +82,27 @@ py -3.12 -m venv .venv
 ```
 ├── src/
 │   ├── app.py              # 入口（uvicorn 启动）
-│   ├── server.py           # FastAPI 路由
-│   ├── config.py           # 配置管理
+│   ├── server.py           # FastAPI 路由 + 队列状态接口
+│   ├── config.py           # 配置管理（环境变量覆盖）
 │   ├── qwen_asr.py         # 远程 ASR 客户端（实时录音用）
-│   ├── file_processor.py   # 文件上传处理（本地 FunASR 管线）
-│   ├── speaker_diarize.py  # 说话人分离（fsmn-vad + cam++）
-│   ├── llm_summary.py      # LLM 会议纪要生成
+│   ├── file_processor.py   # 文件上传处理（本地 FunASR + 并行分块 + 说话人分离）
+│   ├── feishu_export.py    # 飞书云文档导出
+│   ├── llm_summary.py      # LLM 会议纪要生成（DeepSeek 流式输出）
 │   └── transcript_buffer.py# 转写缓冲区
 ├── web/
 │   ├── index.html          # 前端页面
-│   ├── app.js              # 前端逻辑
-│   └── style.css           # 样式
-├── scripts/start.cmd       # Windows 启动脚本
+│   ├── app.js              # 前端逻辑（含20秒队列轮询）
+│   ├── style.css           # 样式
+│   ├── audio-processor.js  # AudioWorklet 音频采集
+│   ├── record-worker.js    # 录音 Worker
+│   └── favicon.png         # 网站图标
+├── deploy/
+│   ├── .env                # 环境变量模板
+│   ├── meeting-recorder.service  # systemd 服务配置
+│   └── nginx-meeting.conf  # Nginx 反向代理配置
+├── scripts/
+│   ├── start.cmd           # Windows 本地启动脚本
+│   └── deploy.sh           # Linux 一键部署脚本
 ├── requirements.txt        # Python 依赖
 └── models/iic/             # 本地模型（需单独下载，不含在 git 中）
 ```
