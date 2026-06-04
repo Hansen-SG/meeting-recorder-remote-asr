@@ -49,7 +49,7 @@ LLM_MODEL: str = os.environ.get("LLM_MODEL", "deepseek-v4-pro")
 # Web UI 配置
 # ─────────────────────────────────────────
 GRADIO_PORT: int = int(os.environ.get("GRADIO_PORT", "7860"))
-GRADIO_HOST: str = os.environ.get("GRADIO_HOST", "127.0.0.1")
+GRADIO_HOST: str = os.environ.get("GRADIO_HOST", "0.0.0.0")
 
 # ─────────────────────────────────────────
 # 音频配置
@@ -65,22 +65,58 @@ REALTIME_CHUNK_SECONDS: float = float(os.environ.get("REALTIME_CHUNK_SECONDS", "
 SILENCE_THRESHOLD: float = float(os.environ.get("SILENCE_THRESHOLD", "0.002"))
 
 # ─────────────────────────────────────────
-# 说话人分离配置（用于文件上传场景）
+# 文件上传：本地 FunASR 模型配置
 # ─────────────────────────────────────────
-# 使用简单的 MFCC + KMeans 聚类做说话人分离
-# 默认聚类数量 (None=自动估计 1~6)
-SPEAKER_CLUSTERS: int = int(os.environ.get("SPEAKER_CLUSTERS", "0"))  # 0=自动
-# 单段最长（秒），切分后送ASR
-DIARIZE_SEGMENT_SECONDS: float = float(os.environ.get("DIARIZE_SEGMENT_SECONDS", "20.0"))
-
-# 热词/上下文（提升专有名词识别）
-ASR_CONTEXT: str = os.environ.get(
-    "ASR_CONTEXT",
-    "中石油 中国石油 集团公司 数字员工 智能体 会议纪要 飞书 大模型 昆仑小智 昆仑数智",
+# 模型目录（包含 paraformer/vad/punc/spk 四个模型子目录）
+from pathlib import Path
+_SRC_DIR = Path(__file__).resolve().parent
+MODELS_DIR: str = os.environ.get(
+    "MODELS_DIR",
+    str(_SRC_DIR.parent / "models" / "iic")
 )
+
+# 并行处理配置（大文件拆分为 10 分钟块并行处理）
+PARALLEL_WORKERS: int = int(os.environ.get("PARALLEL_WORKERS", "6"))
+FILE_CHUNK_SECONDS: float = float(os.environ.get("FILE_CHUNK_SECONDS", "600.0"))  # 10分钟
+
+# 内置热词（写死，不对外暴露）
+_BUILTIN_HOTWORDS = "数字员工 智能体 MCP 飞书 昆仑小智 昆仑数智 昆仑智联 剑锋总 朝晖总"
+
+# 用户可配置的额外热词（通过环境变量或前端传入）
+ASR_CONTEXT: str = os.environ.get("ASR_CONTEXT", "")
+
+# 合并后的完整热词（内置 + 用户配置）
+def get_hotwords(user_hotwords: str = "") -> str:
+    """合并内置热词和用户热词，返回空格分隔的完整列表"""
+    parts = [_BUILTIN_HOTWORDS]
+    if ASR_CONTEXT:
+        parts.append(ASR_CONTEXT)
+    if user_hotwords:
+        parts.append(user_hotwords)
+    return " ".join(parts)
 
 # VAD 最大单段时长（毫秒）
 ASR_VAD_MAX_SEGMENT_MS: int = int(os.environ.get("ASR_VAD_MAX_SEGMENT_MS", "60000"))
+
+# SeACo 热词偏置权重（控制热词对识别结果的影响强度，默认1.0，越大热词越强）
+SEACO_WEIGHT: float = float(os.environ.get("SEACO_WEIGHT", "1.0"))
+
+
+# ─────────────────────────────────────────
+# 飞书导出配置（云文档）
+# ─────────────────────────────────────────
+FEISHU_BASE_URL: str = os.environ.get(
+    "FEISHU_BASE_URL", "https://open.fklzl.cnpc.com.cn"
+)
+FEISHU_APP_ID: str = os.environ.get(
+    "FEISHU_APP_ID", "cli_aa8697c62eb8d366"
+)
+FEISHU_APP_SECRET: str = os.environ.get(
+    "FEISHU_APP_SECRET", "wFErLj6okrtDUEBCKQCS8don4aiJIlEb"
+)
+FEISHU_DOC_BASE_URL: str = os.environ.get(
+    "FEISHU_DOC_BASE_URL", "https://nipj5983sr.fklzl.cnpc.com.cn"
+)
 
 
 def validate() -> list[str]:

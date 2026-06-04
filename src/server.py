@@ -3,14 +3,16 @@ FastAPI 后端服务
 
 - GET  /              -> 返回 index.html
 - POST /api/transcribe-chunk   -> 实时识别（前端 MediaRecorder 录的音频片段）
-- POST /api/transcribe-file    -> 文件上传：说话人分离 + 识别
+- POST /api/transcribe-file    -> 文件上传：说话人分离 + 识别（本地 FunASR 并行）
 - POST /api/summary            -> 根据转写文本生成会议纪要（流式 SSE）
 """
 import io
 import json
 import logging
+import queue
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +47,13 @@ INDEX_HTML = STATIC_DIR / "index.html"
 _asr_client = Qwen3ASRClient()
 _summary_gen = LLMSummaryGenerator()
 
+# ─────────────────────────────────────────
+# 任务队列状态（用于前端排队提示）
+# ─────────────────────────────────────────
+_queue_lock = threading.Lock()
+_queue_processing = 0  # 当前正在处理的文件数
+_queue_waiting = 0     # 排队等待的文件数
+
 app = FastAPI(title="远程 Qwen3-ASR 会议记录")
 app.add_middleware(
     CORSMiddleware,
@@ -52,6 +61,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_preload_model():
+    """服务启动时预加载模型：主进程模型 + 6进程预热池"""
+    from file_processor import _get_local_model, init_worker_pool
+    try:
+        logger.info("正在预加载本地 FunASR 模型（主进程）...")
+        _get_local_model()
+        logger.info("主进程模型预加载完成")
+    except Exception as e:
+        logger.warning(f"主进程模型预加载失败: {e}")
+
+    try:
+        init_worker_pool()
+    except Exception as e:
+        logger.warning(f"进程池预热失败（大文件将降级为顺序处理）: {e}")
 
 
 # ─────────────────────────────────────────
@@ -87,23 +113,47 @@ async def health():
     }
 
 
+@app.get("/api/queue-status")
+async def queue_status():
+    """返回当前文件处理队列状态"""
+    with _queue_lock:
+        processing = _queue_processing
+        waiting = _queue_waiting
+    return {
+        "processing": processing,
+        "waiting": waiting,
+        "total": processing + waiting,
+    }
+
+
 # ─────────────────────────────────────────
 # 实时识别（前端按时间窗口切片发上来）
 # ─────────────────────────────────────────
+
+@app.get("/api/hotwords")
+async def get_hotwords():
+    """获取用户可配置的热词（不包含内置热词）"""
+    return {"hotwords": config.ASR_CONTEXT or ""}
+
 
 @app.post("/api/transcribe-chunk")
 async def transcribe_chunk(
     audio: UploadFile = File(...),
     language: str = Form("zh"),
     timestamp: float = Form(0.0),
+    hotwords: str = Form(""),
 ):
     """
     前端 MediaRecorder 切片上传。
     任意常见音频格式（webm/ogg/mp4/wav 等），直接转发到远程 ASR。
+    hotwords: 空格或逗号分隔的热词列表，为空则使用 config 默认值。
     """
     data = await audio.read()
     if not data:
         return {"text": "", "timestamp": timestamp}
+
+    # 合并内置热词 + 用户热词
+    context = config.get_hotwords(hotwords.strip())
 
     # 检测 MIME 类型
     mime = audio.content_type or "audio/webm"
@@ -118,7 +168,7 @@ async def transcribe_chunk(
             tmp_path = tmp.name
 
         result = _asr_client.transcribe_file(
-            tmp_path, language=language, context=config.ASR_CONTEXT or None
+            tmp_path, language=language, context=context
         )
         text = (result.get("text") or "").strip()
         return {"text": text, "timestamp": timestamp}
@@ -143,11 +193,17 @@ async def transcribe_chunk(
 async def transcribe_file(
     audio: UploadFile = File(...),
     n_speakers: int = Form(0),
+    hotwords: str = Form(""),
 ):
-    """整文件识别 + 说话人分离，进度通过 SSE 流推送。"""
+    """整文件识别 + 说话人分离，进度通过 SSE 流推送。使用本地 FunASR 并行处理。"""
     data = await audio.read()
     if not data:
         raise HTTPException(400, "空文件")
+
+    # 队列计数：进入排队
+    global _queue_processing, _queue_waiting
+    with _queue_lock:
+        _queue_waiting += 1
 
     suffix = _suffix_for_mime(audio.content_type or "", audio.filename)
     with tempfile.NamedTemporaryFile(
@@ -157,44 +213,82 @@ async def transcribe_file(
         tmp_path = tmp.name
 
     def event_stream():
-        try:
-            progress_state = {"done": 0, "total": 0, "msg": ""}
+        global _queue_processing, _queue_waiting
+        progress_queue = queue.Queue()
 
-            def progress_cb(done: int, total: int, msg: str):
-                progress_state["done"] = done
-                progress_state["total"] = total
-                progress_state["msg"] = msg
+        # 队列计数：从排队转为处理中
+        with _queue_lock:
+            _queue_waiting = max(0, _queue_waiting - 1)
+            _queue_processing += 1
 
-            # 先发一个开始事件
-            yield _sse({"event": "start", "filename": audio.filename})
+        def progress_cb(done: int, total: int, msg: str):
+            progress_queue.put({"event": "progress", "done": done, "total": total, "msg": msg})
 
-            # 由于 progress 是同步回调，这里改为一边跑一边发：
-            # 为简化，先全部跑完再一次性返回（前端用单个 fetch + json 也可，但流式更好看）。
-            results, stats = transcribe_file_with_diarization(
-                tmp_path,
-                _asr_client,
-                n_speakers=int(n_speakers),
-                progress_callback=progress_cb,
-            )
-            transcript_text = format_transcript(results)
-            llm_input = format_transcript_for_llm(results)
-            yield _sse({
-                "event": "transcript",
-                "text": transcript_text,
-                "llm_input": llm_input,
-                "stats": stats,
-            })
-            yield _sse({"event": "done"})
-        except Exception as e:
-            logger.exception("文件识别失败")
-            yield _sse({"event": "error", "message": str(e)})
-        finally:
+        def run_processing():
             try:
-                Path(tmp_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+                # 合并热词：前端传入优先，为空时用配置默认值
+                hw = hotwords.strip() if hotwords.strip() else None
+                results, stats = transcribe_file_with_diarization(
+                    tmp_path,
+                    client=None,
+                    n_speakers=int(n_speakers),
+                    progress_callback=progress_cb,
+                    hotwords_override=hw,
+                )
+                transcript_text = format_transcript(results)
+                llm_input = format_transcript_for_llm(results)
+                progress_queue.put({
+                    "event": "_result",
+                    "text": transcript_text,
+                    "llm_input": llm_input,
+                    "stats": stats,
+                })
+            except Exception as e:
+                logger.exception("文件识别失败")
+                progress_queue.put({"event": "_error", "message": str(e)})
+            finally:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+        thread = threading.Thread(target=run_processing, daemon=True)
+        thread.start()
+
+        yield _sse({"event": "start", "filename": audio.filename})
+
+        while True:
+            try:
+                msg = progress_queue.get(timeout=600)
+            except queue.Empty:
+                yield _sse({"event": "error", "message": "处理超时"})
+                break
+
+            if msg["event"] == "progress":
+                yield _sse(msg)
+            elif msg["event"] == "_result":
+                yield _sse({
+                    "event": "transcript",
+                    "text": msg["text"],
+                    "llm_input": msg["llm_input"],
+                    "stats": msg["stats"],
+                })
+                break
+            elif msg["event"] == "_error":
+                yield _sse({"event": "error", "message": msg["message"]})
+                break
+
+        # 队列计数：处理完成
+        with _queue_lock:
+            _queue_processing = max(0, _queue_processing - 1)
+
+        yield _sse({"event": "done"})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 # ─────────────────────────────────────────
@@ -220,6 +314,45 @@ async def summary(transcript: str = Form(...), title: Optional[str] = Form(None)
             yield _sse({"event": "error", "message": str(e)})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ─────────────────────────────────────────
+# 导出云文档
+# ─────────────────────────────────────────
+
+@app.post("/api/export")
+async def export_to_doc(
+    transcript: str = Form(""),
+    summary: str = Form(""),
+    title: Optional[str] = Form(None),
+):
+    """将转写结果和会议纪要导出为飞书云文档"""
+    if not transcript and not summary:
+        return JSONResponse({"error": "无内容可导出"}, status_code=400)
+
+    try:
+        from feishu_export import FeishuExporter, FeishuExportError
+
+        exporter = FeishuExporter()
+
+        # 组合导出内容
+        content_parts = []
+        if summary:
+            content_parts.append(summary)
+        if transcript:
+            content_parts.append("\n---\n\n## 完整转写记录\n\n")
+            content_parts.append(transcript)
+
+        full_content = "\n".join(content_parts)
+        doc_title = title or "会议记录"
+
+        result = exporter.export_summary(doc_title, full_content)
+        logger.info(f"导出飞书文档成功: {result.get('url', '')}")
+        return {"ok": True, "url": result["url"], "document_id": result["document_id"]}
+
+    except Exception as e:
+        logger.exception("导出飞书文档失败")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────

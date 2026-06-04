@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>远程 Qwen3-ASR 会议记录</title>
+  <title>昆仑小智会议记录助手</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-dot"></span>
-      <h1>会议记录助手</h1>
-      <span class="brand-sub">基于 Qwen3-ASR-Flash</span>
+      <img class="brand-icon" src="/static/favicon.png" alt="昆仑小智" />
+      <h1>昆仑小智会议记录助手</h1>
     </div>
     <div class="status-pill" id="health-pill">检查中…</div>
   </header>
@@ -48,6 +48,11 @@
             <input id="auto-flush" type="checkbox" checked /> 录完自动生成纪要
           </label>
         </div>
+
+        <div class="hotwords-wrap">
+          <label class="small hotwords-label">热词（提升专有名词识别率，空格分隔）：</label>
+          <textarea id="hotwords-input" class="hotwords-textarea" rows="2" placeholder="加载中..."></textarea>
+        </div>
       </div>
 
       <div class="card">
@@ -58,7 +63,10 @@
       <div class="card">
         <div class="row between">
           <h3>📝 会议纪要</h3>
-          <button id="btn-summary-rt" class="btn">生成会议纪要</button>
+          <div class="row" style="gap:8px">
+            <button id="btn-summary-rt" class="btn">生成会议纪要</button>
+            <button id="btn-export-rt" class="btn" disabled>📤 导出云文档</button>
+          </div>
         </div>
         <div id="rt-summary" class="markdown" data-empty="点击右上角的『生成会议纪要』按钮…"></div>
       </div>
@@ -91,6 +99,18 @@
           <span id="upload-status" class="meta-text"></span>
         </div>
 
+        <div class="hotwords-wrap">
+          <label class="small hotwords-label">热词（提升专有名词识别率，空格分隔）：</label>
+          <textarea id="upload-hotwords-input" class="hotwords-textarea" rows="2" placeholder="加载中..."></textarea>
+        </div>
+
+        <div class="queue-info-wrap" id="queue-info-wrap" style="display:none">
+          <div class="queue-info" id="queue-info">
+            <span class="queue-icon">⏳</span>
+            <span id="queue-text">检查队列中…</span>
+          </div>
+        </div>
+
         <div class="progress-wrap">
           <div class="progress-bar"><div id="upload-progress" class="progress-fill"></div></div>
         </div>
@@ -104,7 +124,10 @@
       <div class="card">
         <div class="row between">
           <h3>📝 会议纪要</h3>
-          <button id="btn-summary-up" class="btn" disabled>生成会议纪要</button>
+          <div class="row" style="gap:8px">
+            <button id="btn-summary-up" class="btn" disabled>生成会议纪要</button>
+            <button id="btn-export-up" class="btn" disabled>📤 导出云文档</button>
+          </div>
         </div>
         <div id="up-summary" class="markdown" data-empty="转写完成后可生成会议纪要…"></div>
       </div>

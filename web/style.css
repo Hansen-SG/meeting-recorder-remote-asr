@@ -49,25 +49,16 @@ html, body {
   gap: 10px;
 }
 
+.brand-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+
 .brand h1 {
   font-size: 17px;
   font-weight: 600;
   margin: 0;
-}
-
-.brand-sub {
-  color: var(--text-soft);
-  font-size: 12px;
-  padding-left: 6px;
-  border-left: 1px solid var(--border);
-  margin-left: 4px;
-}
-
-.brand-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
 }
 
 .status-pill {
@@ -433,6 +424,61 @@ html, body {
 .markdown strong {
   color: var(--text);
   font-weight: 600;
+}
+
+/* Hotwords */
+.hotwords-wrap {
+  margin-top: 10px;
+}
+
+.hotwords-label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.hotwords-textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  background: var(--code-bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.hotwords-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Queue Info */
+.queue-info-wrap {
+  margin-top: 10px;
+}
+
+.queue-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #fef9e7;
+  border: 1px solid #f5d76e;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #7d6608;
+}
+
+.queue-icon {
+  font-size: 16px;
+}
+
+.queue-info.idle {
+  background: #eafaf1;
+  border-color: #82e0aa;
+  color: #1e8449;
 }
 
 /* Dropzone */

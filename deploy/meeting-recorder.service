@@ -1,0 +1,17 @@
+[Unit]
+Description=Meeting Recorder ASR Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/export/meeting-recorder
+ExecStart=/export/meeting-recorder/.venv/bin/python src/app.py
+EnvironmentFile=/export/meeting-recorder/deploy/.env
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/export/meeting-recorder/logs/app.log
+StandardError=append:/export/meeting-recorder/logs/app.log
+
+[Install]
+WantedBy=multi-user.target

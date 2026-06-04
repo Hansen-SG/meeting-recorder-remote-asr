@@ -26,3 +26,18 @@ Thumbs.db
 # Temp files
 *.tmp
 *.log
+
+# Test & temp scripts
+test_*.py
+test_*.txt
+test_*.wav
+test_*.mp3
+list_models.py
+nul
+deploy_queue.py
+
+# Audio samples
+录音.m4a
+
+# Deploy archive
+remote-asr-deploy.tar.gz

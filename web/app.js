@@ -110,21 +110,45 @@
   healthCheck();
 
   // ─────────────────────────────────────
-  // 实时录音
+  // 热词管理
+  // ─────────────────────────────────────
+  const hotwordsInput = $("#hotwords-input");
+  const uploadHotwordsInput = $("#upload-hotwords-input");
+
+  async function loadHotwords() {
+    try {
+      const r = await fetch("/api/hotwords");
+      if (r.ok) {
+        const data = await r.json();
+        const hw = data.hotwords || "";
+        hotwordsInput.value = hw;
+        hotwordsInput.placeholder = "输入热词，空格分隔，如：中石油 大模型 昆仑数智";
+        uploadHotwordsInput.value = hw;
+        uploadHotwordsInput.placeholder = "输入热词，空格分隔，如：中石油 大模型 昆仑数智";
+      }
+    } catch (e) {
+      hotwordsInput.placeholder = "输入热词，空格分隔";
+      uploadHotwordsInput.placeholder = "输入热词，空格分隔";
+    }
+  }
+  loadHotwords();
+
+  // ─────────────────────────────────────
+  // 实时录音（AudioWorklet + Web Worker 方案）
+  // 后台 Tab 不受节流影响，持续录音
   // ─────────────────────────────────────
   const RT = {
     mediaStream: null,
-    recorder: null,
-    chunks: [],
+    sysStream: null,
+    audioCtx: null,
+    workletNode: null,
+    worker: null,
     segments: [],          // {ts, text}
     partial: "",
     startTime: 0,
-    chunkIndex: 0,
     timerId: null,
-    audioCtx: null,
     analyser: null,
     vuId: null,
-    cycleId: null,
     isRunning: false,
   };
 
@@ -157,11 +181,11 @@
     }
   }
 
-  // 启动 VU meter
-  function startVuMeter(stream) {
+  // VU meter（使用同一个 AudioContext）
+  function startVuMeter() {
     try {
-      RT.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const src = RT.audioCtx.createMediaStreamSource(stream);
+      if (!RT.audioCtx || !RT.mediaStream) return;
+      const src = RT.audioCtx.createMediaStreamSource(RT.mediaStream);
       RT.analyser = RT.audioCtx.createAnalyser();
       RT.analyser.fftSize = 512;
       src.connect(RT.analyser);
@@ -186,34 +210,19 @@
   function stopVuMeter() {
     if (RT.vuId) cancelAnimationFrame(RT.vuId);
     RT.vuId = null;
-    if (RT.audioCtx) {
-      try { RT.audioCtx.close(); } catch {}
-      RT.audioCtx = null;
-    }
+    RT.analyser = null;
     vuBar.style.width = "0%";
-  }
-
-  // 选用浏览器支持的 mime
-  function pickMimeType() {
-    const candidates = [
-      "audio/webm;codecs=opus",
-      "audio/webm",
-      "audio/ogg;codecs=opus",
-      "audio/mp4",
-    ];
-    for (const m of candidates) {
-      if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
-    }
-    return "";
   }
 
   async function startRecording() {
     if (RT.isRunning) return;
+
+    // 1. 获取麦克风
+    let micStream = null;
     try {
-      RT.mediaStream = await navigator.mediaDevices.getUserMedia({
+      micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
         },
@@ -223,122 +232,142 @@
       return;
     }
 
+    // 2. 尝试获取系统音频（通过屏幕共享的音频轨道）
+    let sysStream = null;
+    try {
+      sysStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: 1, height: 1, frameRate: 1 },  // 最小视频（必须请求）
+        audio: true,  // 系统音频
+      });
+      // 关闭不需要的视频轨道
+      sysStream.getVideoTracks().forEach((t) => t.stop());
+    } catch (e) {
+      // 用户拒绝或浏览器不支持系统音频，仅用麦克风继续
+      console.info("系统音频不可用（仅录制麦克风）:", e.message);
+    }
+
+    // 3. 创建 AudioContext + 混合音频源
+    try {
+      RT.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await RT.audioCtx.audioWorklet.addModule("/static/audio-processor.js");
+      RT.workletNode = new AudioWorkletNode(RT.audioCtx, "record-processor");
+
+      // 混合麦克风 + 系统音频（如果有）
+      const micSource = RT.audioCtx.createMediaStreamSource(micStream);
+      micSource.connect(RT.workletNode);
+
+      if (sysStream && sysStream.getAudioTracks().length > 0) {
+        const sysSource = RT.audioCtx.createMediaStreamSource(sysStream);
+        sysSource.connect(RT.workletNode);
+      }
+
+      // 保存 stream 引用以便后续关闭
+      RT.mediaStream = micStream;
+      RT.sysStream = sysStream;
+    } catch (e) {
+      setRtStatus("❌ AudioWorklet 初始化失败：" + e.message);
+      micStream.getTracks().forEach((t) => t.stop());
+      if (sysStream) sysStream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    // 3. 创建 Web Worker
+    RT.worker = new Worker("/static/record-worker.js");
+    RT.worker.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.type === "result") {
+        RT.segments.push({ ts: msg.timestamp, text: msg.text });
+        renderRtTranscript();
+      } else if (msg.type === "error") {
+        console.warn("Worker 识别错误:", msg.message);
+      }
+    };
+
+    // 4. AudioWorklet → Worker 数据桥接
+    RT.workletNode.port.onmessage = (e) => {
+      if (e.data.type === "audio" && RT.worker) {
+        RT.worker.postMessage(
+          { type: "audio", samples: e.data.samples, sampleRate: e.data.sampleRate },
+          [e.data.samples]
+        );
+      }
+    };
+
+    // 5. 启动 Worker
+    const chunkSecs = Math.max(3, Math.min(30, Number(chunkSecsInput.value) || 8));
     RT.segments = [];
     RT.partial = "";
-    RT.chunkIndex = 0;
     RT.startTime = Date.now();
     RT.isRunning = true;
-    renderRtTranscript();
 
+    RT.worker.postMessage({
+      type: "start",
+      chunkSecs: chunkSecs,
+      hotwords: (hotwordsInput.value || "").trim(),
+      sampleRate: RT.audioCtx.sampleRate,
+      startTime: RT.startTime,
+    });
+
+    renderRtTranscript();
     btnStart.disabled = true;
     btnStop.disabled = false;
-    setRtStatus("🔴 录音中…", true);
+    const hasSys = RT.sysStream && RT.sysStream.getAudioTracks().length > 0;
+    setRtStatus(hasSys ? "🔴 录音中（麦克风+系统声音）" : "🔴 录音中（仅麦克风）", true);
 
-    startVuMeter(RT.mediaStream);
+    startVuMeter();
 
-    // 启动 1Hz 定时刷新
+    // 计时器
     RT.timerId = setInterval(() => {
       const sec = (Date.now() - RT.startTime) / 1000;
       rtTimer.textContent = fmtTime(sec);
     }, 500);
-
-    // 周期重启 MediaRecorder，每个周期是一个独立完整的音频片段
-    cycleRecorder();
-  }
-
-  function cycleRecorder() {
-    if (!RT.isRunning) return;
-
-    const chunkSecs = Math.max(3, Math.min(30, Number(chunkSecsInput.value) || 8));
-    const mime = pickMimeType();
-    const opts = mime ? { mimeType: mime } : {};
-
-    let recorder;
-    try {
-      recorder = new MediaRecorder(RT.mediaStream, opts);
-    } catch (e) {
-      setRtStatus("❌ MediaRecorder 创建失败: " + e.message);
-      stopRecording();
-      return;
-    }
-
-    const localChunks = [];
-    const chunkStartTs = (Date.now() - RT.startTime) / 1000;
-
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) localChunks.push(e.data);
-    };
-
-    recorder.onstop = async () => {
-      const blob = new Blob(localChunks, { type: mime || "audio/webm" });
-      if (blob.size > 1000) {
-        sendChunkForRecognition(blob, chunkStartTs, mime);
-      }
-      // 启动下一个周期
-      if (RT.isRunning) {
-        // 立即开始下一段，避免漏录
-        cycleRecorder();
-      }
-    };
-
-    recorder.start();
-    RT.recorder = recorder;
-    RT.cycleId = setTimeout(() => {
-      try {
-        if (recorder.state !== "inactive") recorder.stop();
-      } catch {}
-    }, chunkSecs * 1000);
-  }
-
-  async function sendChunkForRecognition(blob, timestamp, mime) {
-    const form = new FormData();
-    const ext = (mime || "").includes("mp4") ? ".m4a" :
-                (mime || "").includes("ogg") ? ".ogg" : ".webm";
-    form.append("audio", blob, `chunk-${RT.chunkIndex++}${ext}`);
-    form.append("language", "zh");
-    form.append("timestamp", String(timestamp));
-
-    try {
-      const r = await fetch("/api/transcribe-chunk", { method: "POST", body: form });
-      if (!r.ok) {
-        const errTxt = await r.text();
-        console.warn("识别失败:", errTxt);
-        return;
-      }
-      const data = await r.json();
-      const text = (data.text || "").trim();
-      if (text) {
-        RT.segments.push({ ts: timestamp, text });
-        renderRtTranscript();
-      }
-    } catch (e) {
-      console.warn("识别请求异常", e);
-    }
   }
 
   async function stopRecording() {
     if (!RT.isRunning) return;
     RT.isRunning = false;
 
-    if (RT.cycleId) { clearTimeout(RT.cycleId); RT.cycleId = null; }
-    if (RT.timerId) { clearInterval(RT.timerId); RT.timerId = null; }
-
-    // 停止当前段，让 onstop 把最后一段送上去
-    if (RT.recorder && RT.recorder.state !== "inactive") {
-      try { RT.recorder.stop(); } catch {}
+    // 通知 Worker 停止并发送残余数据
+    if (RT.worker) {
+      RT.worker.postMessage({ type: "stop" });
+      // 给 Worker 2 秒处理最后一段
+      setTimeout(() => {
+        if (RT.worker) { RT.worker.terminate(); RT.worker = null; }
+      }, 3000);
     }
+
+    // 停止 AudioWorklet
+    if (RT.workletNode) {
+      RT.workletNode.port.postMessage({ command: "stop" });
+      RT.workletNode.disconnect();
+      RT.workletNode = null;
+    }
+
+    // 关闭 AudioContext
+    if (RT.audioCtx) {
+      try { await RT.audioCtx.close(); } catch {}
+      RT.audioCtx = null;
+    }
+
+    // 停止麦克风
     if (RT.mediaStream) {
       RT.mediaStream.getTracks().forEach((t) => t.stop());
       RT.mediaStream = null;
     }
+    // 停止系统音频
+    if (RT.sysStream) {
+      RT.sysStream.getTracks().forEach((t) => t.stop());
+      RT.sysStream = null;
+    }
+
     stopVuMeter();
+    if (RT.timerId) { clearInterval(RT.timerId); RT.timerId = null; }
 
     btnStart.disabled = false;
     btnStop.disabled = true;
     setRtStatus(`✅ 已停止（${RT.segments.length} 句）`);
 
     if (autoFlushInput.checked && RT.segments.length > 0) {
-      // 等 2 秒让最后一段识别完
       setTimeout(() => generateRtSummary(), 2500);
     }
   }
@@ -381,6 +410,51 @@
   }
 
   btnSummaryRt.addEventListener("click", generateRtSummary);
+
+  // 实时录音导出按钮
+  const btnExportRt = $("#btn-export-rt");
+  btnExportRt.addEventListener("click", async () => {
+    const transcript = buildRtTranscriptText();
+    const summary = rtSummary.innerText || "";
+    await exportToDoc(transcript, summary, btnExportRt);
+  });
+
+  // 纪要生成完毕后启用导出按钮
+  const _origGenerateRtSummary = generateRtSummary;
+  generateRtSummary = async function () {
+    await _origGenerateRtSummary();
+    if (rtSummary.innerText.trim().length > 10) {
+      btnExportRt.disabled = false;
+    }
+  };
+
+  // 通用导出函数
+  async function exportToDoc(transcript, summary, btn) {
+    btn.disabled = true;
+    btn.textContent = "导出中…";
+    try {
+      const form = new FormData();
+      form.append("transcript", transcript);
+      form.append("summary", summary);
+      const r = await fetch("/api/export", { method: "POST", body: form });
+      const data = await r.json();
+      if (data.ok && data.url) {
+        btn.textContent = "导出成功";
+        window.open(data.url, "_blank");
+      } else {
+        btn.textContent = "导出失败";
+        alert("导出失败: " + (data.error || "未知错误"));
+      }
+    } catch (e) {
+      btn.textContent = "导出失败";
+      alert("导出异常: " + e.message);
+    } finally {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = "📤 导出云文档";
+      }, 3000);
+    }
+  }
 
   // 通用 SSE 流式接收
   async function streamSummary(transcript, onToken, title = null) {
@@ -456,7 +530,64 @@
     selectedFile = file;
     dzFilename.textContent = `已选择: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
     btnUpload.disabled = false;
+    // 选择文件后立即查询一次队列状态
+    fetchQueueStatus();
   }
+
+  // ─────────────────────────────────────
+  // 队列状态轮询（每20秒）
+  // ─────────────────────────────────────
+  const queueInfoWrap = $("#queue-info-wrap");
+  const queueInfo = $("#queue-info");
+  const queueText = $("#queue-text");
+  let queuePollTimer = null;
+
+  async function fetchQueueStatus() {
+    try {
+      const r = await fetch("/api/queue-status");
+      if (!r.ok) return;
+      const data = await r.json();
+      updateQueueDisplay(data);
+    } catch (e) {
+      // 网络失败时隐藏
+      queueInfoWrap.style.display = "none";
+    }
+  }
+
+  function updateQueueDisplay(data) {
+    const { processing, waiting, total } = data;
+    queueInfoWrap.style.display = "block";
+
+    if (total === 0) {
+      queueInfo.className = "queue-info idle";
+      queueText.textContent = "当前无排队，上传后可立即处理";
+    } else {
+      queueInfo.className = "queue-info";
+      const pos = waiting + 1; // 自己将是队列中的下一个
+      const estMinutes = Math.ceil(processing * 2 + waiting * 2); // 粗略估算
+      let msg = `当前 ${processing} 个任务正在处理`;
+      if (waiting > 0) msg += `，${waiting} 个排队中`;
+      msg += `。您上传后预计第 ${pos} 位`;
+      if (estMinutes > 0) msg += `，约等 ${estMinutes} 分钟`;
+      queueText.textContent = msg;
+    }
+  }
+
+  function startQueuePolling() {
+    stopQueuePolling();
+    fetchQueueStatus();
+    queuePollTimer = setInterval(fetchQueueStatus, 20000); // 每20秒
+  }
+
+  function stopQueuePolling() {
+    if (queuePollTimer) {
+      clearInterval(queuePollTimer);
+      queuePollTimer = null;
+    }
+  }
+
+  // 页面加载时开始轮询
+  startQueuePolling();
 
   btnUpload.addEventListener("click", async () => {
     if (!selectedFile) return;
@@ -464,21 +595,30 @@
     btnSummaryUp.disabled = true;
     upTranscript.innerHTML = "";
     upSummary.innerHTML = "";
-    uploadProgress.style.width = "5%";
-    uploadStatus.textContent = "上传文件中…";
+    uploadProgress.style.width = "2%";
+    const sizeMB = (selectedFile.size / 1024 / 1024).toFixed(1);
+    uploadStatus.textContent = `上传中 (${sizeMB} MB)…`;
+
+    // 隐藏队列提示，进入处理状态
+    queueInfoWrap.style.display = "none";
+    stopQueuePolling();
 
     const form = new FormData();
     form.append("audio", selectedFile);
     form.append("n_speakers", speakersSelect.value);
+    form.append("hotwords", (uploadHotwordsInput.value || "").trim());
 
     try {
       const r = await fetch("/api/transcribe-file", { method: "POST", body: form });
       if (!r.ok) throw new Error("HTTP " + r.status);
 
+      // 上传完成，开始接收 SSE 流
+      uploadProgress.style.width = "10%";
+      uploadStatus.textContent = "已上传，正在识别…";
+
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      uploadProgress.style.width = "30%";
 
       while (true) {
         const { value, done } = await reader.read();
@@ -500,21 +640,29 @@
       uploadProgress.style.width = "0%";
     } finally {
       btnUpload.disabled = false;
+      // 处理完成后恢复轮询
+      startQueuePolling();
     }
   });
 
   function handleUploadEvent(obj) {
     if (obj.event === "start") {
       uploadStatus.textContent = `处理中: ${obj.filename}`;
-      uploadProgress.style.width = "40%";
+      uploadProgress.style.width = "10%";
+    } else if (obj.event === "progress") {
+      const pct = 10 + (obj.done / Math.max(obj.total, 1)) * 75;
+      uploadProgress.style.width = pct + "%";
+      uploadStatus.textContent = obj.msg || `处理中 ${obj.done}/${obj.total}`;
     } else if (obj.event === "transcript") {
       uploadProgress.style.width = "90%";
       lastLlmInput = obj.llm_input || "";
       renderUploadTranscript(obj.text || "");
       const s = obj.stats || {};
+      const dur = s.total_duration || 0;
+      const durStr = dur >= 60 ? `${(dur/60).toFixed(1)}分钟` : `${dur.toFixed(1)}秒`;
       uploadStatus.textContent =
-        `✅ 完成：时长 ${(s.total_duration || 0).toFixed(1)}s, ` +
-        `${s.recognized || 0}/${s.segments || 0} 段, ${s.speakers || 0} 位说话人`;
+        `✅ 完成：音频 ${durStr}, ` +
+        `${s.recognized || 0} 段, ${s.speakers || 0} 位说话人`;
       btnSummaryUp.disabled = false;
     } else if (obj.event === "done") {
       uploadProgress.style.width = "100%";
@@ -552,11 +700,21 @@
         acc += tok;
         upSummary.innerHTML = renderMarkdown(acc);
       });
+      // 纪要生成完毕，启用导出按钮
+      btnExportUp.disabled = false;
     } catch (e) {
       upSummary.innerHTML += `<p style="color: var(--danger)">❌ ${escapeHtml(e.message)}</p>`;
     } finally {
       btnSummaryUp.disabled = false;
       btnSummaryUp.textContent = "重新生成";
     }
+  });
+
+  // 上传音频导出按钮
+  const btnExportUp = $("#btn-export-up");
+  btnExportUp.addEventListener("click", async () => {
+    const transcript = upTranscript.innerText || "";
+    const summary = upSummary.innerText || "";
+    await exportToDoc(transcript, summary, btnExportUp);
   });
 })();

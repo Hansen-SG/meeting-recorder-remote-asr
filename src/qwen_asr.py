@@ -131,7 +131,6 @@ class Qwen3ASRClient:
         url = f"{self.api_base}/v1/chat/completions"
         data_url = _audio_to_data_url(audio_bytes, mime)
 
-        # 注意：qwen3-asr-flash 不支持 system message，仅 user message 中嵌入音频
         messages = [{
             "role": "user",
             "content": [
@@ -143,6 +142,11 @@ class Qwen3ASRClient:
             "model": self.model,
             "messages": messages,
         }
+
+        # 热词通过 parameters 字段传入（DashScope 兼容格式）
+        if context:
+            hotwords = ",".join(context.strip().split())
+            payload["parameters"] = {"hotwords": hotwords}
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
